@@ -1,25 +1,25 @@
 """
 train_image_detector.py
 
-Train a binary AI-generated-vs-real image detector.
+Train a binary AI-generated-vs-REAL image detector.
 
 Expected dataset:
 
     data/
         images/
             train/
-                fake/
+                FAKE/
                     image1.jpg
                     image2.jpg
                     ...
-                real/
+                REAL/
                     image1.jpg
                     image2.jpg
                     ...
             test/
-                fake/
+                FAKE/
                     ...
-                real/
+                REAL/
                     ...
 
 The script:
@@ -39,6 +39,7 @@ Install dependencies:
 For CUDA-enabled PyTorch, install the appropriate PyTorch build for
 your system from:
     https://pytorch.org/get-started/locally/
+    python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126    
 
 Then run:
 
@@ -75,8 +76,12 @@ from torchvision.models import MobileNet_V3_Small_Weights
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-TRAIN_DIR = PROJECT_ROOT / "data" / "images" / "train"
-TEST_DIR = PROJECT_ROOT / "data" / "images" / "test"
+# TRAIN_DIR = PROJECT_ROOT / "data" / "images" / "train"
+# TEST_DIR = PROJECT_ROOT / "data" / "images" / "test"
+
+# Disregard if seen, route to your files *as your system requires*
+TRAIN_DIR = Path(r"C:/temptrainingdata/train")
+TEST_DIR = Path(r"C:/temptrainingdata/test")
 
 MODEL_DIR = PROJECT_ROOT / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -251,31 +256,31 @@ def build_datasets():
     print()
 
     # We explicitly require the expected folders.
-    required_classes = {"fake", "real"}
+    required_classes = {"FAKE", "REAL"}
 
     if set(full_train_augmented.classes) != required_classes:
         raise RuntimeError(
             "Training dataset must contain exactly these class folders: "
-            "'fake' and 'real'. "
+            "'FAKE' and 'REAL'. "
             f"Found: {full_train_augmented.classes}"
         )
 
     if set(test_dataset.classes) != required_classes:
         raise RuntimeError(
             "Test dataset must contain exactly these class folders: "
-            "'fake' and 'real'. "
+            "'FAKE' and 'REAL'. "
             f"Found: {test_dataset.classes}"
         )
 
     # ImageFolder normally assigns alphabetic indices:
     #
-    # fake -> 0
-    # real -> 1
+    # FAKE -> 0
+    # REAL -> 1
     #
     # But our detector wants:
     #
-    # real -> 0
-    # fake -> 1
+    # REAL -> 0
+    # FAKE -> 1
     #
     # We will explicitly remap labels later rather than relying on
     # ImageFolder's alphabetical ordering.
@@ -327,8 +332,8 @@ def convert_label(imagefolder_label: int, class_to_idx: dict[str, int]) -> int:
 
     Detector convention:
 
-        0 = real
-        1 = fake / AI
+        0 = REAL
+        1 = FAKE / AI
     """
 
     idx_to_class = {
@@ -338,10 +343,10 @@ def convert_label(imagefolder_label: int, class_to_idx: dict[str, int]) -> int:
 
     class_name = idx_to_class[imagefolder_label]
 
-    if class_name == "fake":
+    if class_name == "FAKE":
         return 1
 
-    if class_name == "real":
+    if class_name == "REAL":
         return 0
 
     raise RuntimeError(
@@ -350,7 +355,7 @@ def convert_label(imagefolder_label: int, class_to_idx: dict[str, int]) -> int:
 
 
 class RemappedSubset(torch.utils.data.Dataset):
-    """Dataset wrapper that changes fake/real labels to 1/0."""
+    """Dataset wrapper that changes FAKE/REAL labels to 1/0."""
 
     def __init__(
         self,
@@ -702,8 +707,8 @@ def save_checkpoint(
         "image_size": IMAGE_SIZE,
 
         "class_mapping": {
-            "real": 0,
-            "fake": 1,
+            "REAL": 0,
+            "FAKE": 1,
         },
     }
 
