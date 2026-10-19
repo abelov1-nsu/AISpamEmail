@@ -1,6 +1,7 @@
 import pandas as pd
+from ..src.config import PATHS
 
-df = pd.read_csv("data/dataset_clean.csv")
+df = pd.read_csv(PATHS.processed_dataset_clean)
 print("Всего:", len(df))
 print(df["label"].value_counts())
 print("\nСредние длины body:")

@@ -1,6 +1,7 @@
 import pandas as pd
+from ..src.config import PATHS
 
-df = pd.read_csv("data/dataset.csv")
+df = pd.read_csv(PATHS.processed_dataset)
 
 print("Всего:", len(df))
 print(df["label"].value_counts())

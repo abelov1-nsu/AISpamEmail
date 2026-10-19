@@ -1,8 +1,8 @@
 import re
 import os
-import numpy as np
 
-from email_parser import (
+from .config import PATHS
+from .email_parser import (
     parse_email_structure,
 )
 
@@ -321,17 +321,17 @@ def process_images(images: list) -> dict:
     
     total_text = ""
     has_qr = 0
-    os.makedirs("data/temp_images", exist_ok=True)
+    PATHS.temporary_images.mkdir(parents=True, exist_ok=True)
     
     for i, url in enumerate(images):
-        save_path = f"data/temp_images/tmp_{i}.jpg"
-        if _download_image(url, save_path):
+        save_path = PATHS.temporary_images / f"tmp_{i}.jpg"
+        if _download_image(url, str(save_path)):
             info = _analyze_image(save_path)
             total_text += " " + info["text"]
             if info["has_qr"]:
                 has_qr = 1
-            if os.path.exists(save_path):
-                os.remove(save_path)
+            if save_path.exists():
+                save_path.unlink()
                 
     return {
         "image_count": len(images),

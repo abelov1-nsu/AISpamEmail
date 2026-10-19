@@ -1,14 +1,14 @@
-import re
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from text_features import extract_features
+from ..src.config import PATHS
+from ..src.text_features import extract_features
 
 
 # ====================== ОБУЧЕНИЕ ======================
 def train_model():
-    """Обучает модель на data/dataset_clean.csv."""
-    df = pd.read_csv("data/dataset_clean.csv")
+    """Обучает модель на configured processed dataset."""
+    df = pd.read_csv(PATHS.processed_dataset_clean)
 
     # целевая метка: AI или нет (ai_spam + partially_ai → 1, остальное → 0)
     y = df["label"].isin(["ai_spam", "partially_ai"]).astype(int)
