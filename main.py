@@ -19,6 +19,13 @@ from collections import Counter
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+# Optional Open WebUI integration
+try:
+    from ai_client import OpenWebUIClient, analyze_with_ai
+    HAS_AI_CLIENT = True
+except ImportError:
+    HAS_AI_CLIENT = False
+
 
 # ============================================================
 # Configuration
@@ -133,6 +140,10 @@ class AnalysisResult:
     components: dict[str, Any] = field(default_factory=dict)
     signals: list[dict[str, Any]] = field(default_factory=list)
     explanations: list[str] = field(default_factory=list)
+
+    # AI-powered fields (Open WebUI)
+    segmentation: Optional[dict[str, Any]] = None
+    ai_judge: Optional[dict[str, Any]] = None
 
     ground_truth: Optional[str] = None
 
@@ -956,7 +967,7 @@ class HeaderAnalyzer:
 
 class EmailAnalyzer:
 
-    def __init__(self):
+    def __init__(self, use_ai: bool = False, ai_client: Any = None):
 
         self.html_analyzer = HTMLAnalyzer()
         self.url_analyzer = URLAnalyzer()
@@ -969,6 +980,12 @@ class EmailAnalyzer:
         self.ai_analyzer = ExperimentalAIAnalyzer()
 
         self.header_analyzer = HeaderAnalyzer()
+
+        # Open WebUI (segmentation + AI judge)
+        self.use_ai = use_ai and HAS_AI_CLIENT
+        self.ai_client = ai_client
+        if self.use_ai and self.ai_client is None:
+            self.ai_client = OpenWebUIClient()
 
     # --------------------------------------------------------
     # Split email into logical components
@@ -1132,7 +1149,7 @@ class EmailAnalyzer:
         ]
 
         # ----------------------------------------------------
-        # Component analysis
+        # Component analysis (paragraph-level)
         # ----------------------------------------------------
 
         text_parts = self.split_text(
@@ -1156,16 +1173,39 @@ class EmailAnalyzer:
                 "sha256": sha256_text(
                     part.text
                 ),
-
-                # Placeholder for future real detector
-                "ai_analysis": {
-                    "available": False,
-                    "reason": (
-                        "No actual AI detector "
-                        "connected yet"
-                    )
-                }
             })
+
+        # ----------------------------------------------------
+        # AI segmentation + AI judge (Open WebUI)
+        # ----------------------------------------------------
+
+        segmentation = None
+        ai_judge_result = None
+
+        if self.use_ai and self.ai_client is not None:
+            try:
+                subject = headers.get("subject", "") or ""
+                has_images = bool(
+                    email.get("attachments")
+                    or (html_result.get("present") and "img" in str(html_result.get("top_tags", [])))
+                )
+
+                ai_out = analyze_with_ai(
+                    text=text,
+                    subject=subject,
+                    has_images=has_images,
+                    client=self.ai_client,
+                )
+                segmentation = ai_out.get("segmentation")
+                ai_judge_result = ai_out.get("ai_judge")
+            except Exception as exc:
+                ai_judge_result = {
+                    "is_ai_generated": False,
+                    "confidence": 0.0,
+                    "label": "error",
+                    "reasoning": f"AI call failed: {exc}",
+                    "suspicious_parts": [],
+                }
 
         return AnalysisResult(
 
@@ -1216,6 +1256,9 @@ class EmailAnalyzer:
             signals=signal_dicts,
 
             explanations=explanations,
+
+            segmentation=segmentation,
+            ai_judge=ai_judge_result,
         )
 
     # --------------------------------------------------------
@@ -1442,11 +1485,12 @@ def save_json(
 
 def analyze_dataset(
     input_directory: Path,
-    output_directory: Path
+    output_directory: Path,
+    use_ai: bool = False,
 ):
 
     parser = EmailParser()
-    analyzer = EmailAnalyzer()
+    analyzer = EmailAnalyzer(use_ai=use_ai)
     loader = DatasetLoader()
 
     files = loader.load_directory(
@@ -1571,9 +1615,9 @@ def analyze_dataset(
 # Synthetic test
 # ============================================================
 
-def run_demo():
+def run_demo(use_ai: bool = False):
 
-    analyzer = EmailAnalyzer()
+    analyzer = EmailAnalyzer(use_ai=use_ai)
 
     examples = [
 
@@ -1728,11 +1772,20 @@ def main():
         )
     )
 
+    parser.add_argument(
+        "--use-ai",
+        action="store_true",
+        help=(
+            "Enable Open WebUI segmentation + AI judge "
+            "(needs OPENWEBUI_BASE_URL / OPENWEBUI_MODEL / optional OPENWEBUI_API_KEY)"
+        )
+    )
+
     args = parser.parse_args()
 
     if args.demo:
 
-        run_demo()
+        run_demo(use_ai=args.use_ai)
         return
 
     if args.dataset is None:
@@ -1746,7 +1799,8 @@ def main():
 
     analyze_dataset(
         args.dataset,
-        args.output
+        args.output,
+        use_ai=args.use_ai,
     )
 
 
