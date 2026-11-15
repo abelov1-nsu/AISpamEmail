@@ -1,81 +1,79 @@
-# Интеграция Open WebUI (сегментация + AI judge)
+# Интеграция Open WebUI (смысловая сегментация + AI judge)
 
-Добавлены два новых поля в итоговый JSON-отчёт:
+## Что добавляется в отчёт
 
-- `segmentation` — разбиение письма на:
-  - `greeting` (приветствие)
-  - `main_body` (основная часть)
-  - `farewell` (прощание / подпись)
-  - `has_images` (есть ли картинки)
+По каждому письму в JSON появляются поля:
 
-- `ai_judge` — вердикт LLM:
-  ```json
+### `segments` — смысловые абзацы
+
+Массив объектов вида:
+
+```json
+[
   {
-    "is_ai_generated": true/false,
-    "confidence": 0.0-1.0,
-    "label": "likely_ai" | "possibly_ai" | "likely_human" | "inconclusive",
-    "reasoning": "...",
-    "suspicious_parts": ["greeting", "main_body", ...]
+    "type": "subject",
+    "content": "Тема письма",
+    "pos": 0
+  },
+  {
+    "type": "greeting",
+    "content": "Здравствуйте!",
+    "pos": 1
+  },
+  {
+    "type": "main_body",
+    "content": "Основной текст...",
+    "pos": 2
+  },
+  {
+    "type": "farewell",
+    "content": "С уважением, ...",
+    "pos": 3
   }
-  ```
+]
+```
 
-Вердикт **не меняет** существующие scores (`spam_score`, `ai_assisted_score` и т.д.) — просто дополнительное поле.
+Типы (`type`) модель выбирает сама по смыслу. Возможные значения:
+`subject`, `greeting`, `introduction`, `main_body`, `request`, `offer`, `warning`, `cta`, `farewell`, `signature`, `disclaimer`, `ps`, `attachment_note`, `other` и другие короткие метки.
+
+### `has_images`
+
+`true` / `false` — есть ли картинки / вложения-изображения.
+
+### `ai_judge`
+
+```json
+{
+  "is_ai_generated": true,
+  "confidence": 0.87,
+  "label": "likely_ai",
+  "reasoning": "...",
+  "suspicious_parts": ["greeting", "main_body"]
+}
+```
+
+Вердикт **не меняет** старые scores — это отдельное поле.
+
+---
 
 ## Настройка
 
-В терминале перед запуском:
-
 ```bash
-export OPENWEBUI_BASE_URL="http://localhost:3000"   # адрес твоего Open WebUI
-export OPENWEBUI_MODEL="llama3.2"                   # имя модели как в UI
-export OPENWEBUI_API_KEY="sk-..."                   # если включена авторизация
+export OPENWEBUI_BASE_URL="http://localhost:3000"
+export OPENWEBUI_MODEL="Qwen3.8-Flash-Next"
+export OPENWEBUI_API_KEY="sk-..."          # если нужна авторизация
 ```
-
-Если API-ключ не нужен — просто не задавай `OPENWEBUI_API_KEY`.
 
 ## Запуск
 
 ```bash
-# демо с AI
+pip install requests
+
+# демо
 python main.py --demo --use-ai
 
-# анализ папки с .eml
+# папка с .eml
 python main.py --dataset ./samples --output ./analysis_results --use-ai
 ```
 
-Без флага `--use-ai` всё работает как раньше (AI-часть пропускается).
-
-## Как это устроено
-
-Файл `ai_client.py`:
-- `OpenWebUIClient` — тонкий клиент к `POST /api/chat/completions`
-- `segment_email()` — промпт для разбиения на greeting / main_body / farewell
-- `ai_judge()` — промпт для вердикта «сгенерировано ИИ или нет»
-- `analyze_with_ai()` — удобная обёртка, которую вызывает `EmailAnalyzer`
-
-В `EmailAnalyzer` добавлен параметр `use_ai=True`. При анализе письма вызывается LLM один раз на сегментацию и один раз на judge.
-
-## Пример фрагмента отчёта
-
-```json
-{
-  "email_id": "example.eml",
-  "spam_score": 0.12,
-  "phishing_score": 0.05,
-  "ai_assisted_score": 0.68,
-  "judgement": "suspicious",
-  "segmentation": {
-    "greeting": "Hello,",
-    "main_body": "I hope this message finds you well. ...",
-    "farewell": "Thank you for your understanding.",
-    "has_images": false
-  },
-  "ai_judge": {
-    "is_ai_generated": true,
-    "confidence": 0.87,
-    "label": "likely_ai",
-    "reasoning": "Formulaic opening and closing, generic corporate tone...",
-    "suspicious_parts": ["greeting", "main_body", "farewell"]
-  }
-}
-```
+Без `--use-ai` всё работает как раньше.
