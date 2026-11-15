@@ -142,7 +142,9 @@ class AnalysisResult:
     explanations: list[str] = field(default_factory=list)
 
     # AI-powered fields (Open WebUI)
-    segmentation: Optional[dict[str, Any]] = None
+    # segments: list of {"type", "content", "pos"}
+    segments: Optional[list[dict[str, Any]]] = None
+    has_images: Optional[bool] = None
     ai_judge: Optional[dict[str, Any]] = None
 
     ground_truth: Optional[str] = None
@@ -1176,27 +1178,32 @@ class EmailAnalyzer:
             })
 
         # ----------------------------------------------------
-        # AI segmentation + AI judge (Open WebUI)
+        # AI semantic segmentation + AI judge (Open WebUI)
         # ----------------------------------------------------
 
-        segmentation = None
+        segments = None
+        has_images_flag = None
         ai_judge_result = None
 
         if self.use_ai and self.ai_client is not None:
             try:
                 subject = headers.get("subject", "") or ""
-                has_images = bool(
+                has_images_flag = bool(
                     email.get("attachments")
-                    or (html_result.get("present") and "img" in str(html_result.get("top_tags", [])))
+                    or (
+                        html_result.get("present")
+                        and "img" in str(html_result.get("top_tags", []))
+                    )
                 )
 
                 ai_out = analyze_with_ai(
                     text=text,
                     subject=subject,
-                    has_images=has_images,
+                    has_images=has_images_flag,
                     client=self.ai_client,
                 )
-                segmentation = ai_out.get("segmentation")
+                segments = ai_out.get("segments")
+                has_images_flag = ai_out.get("has_images", has_images_flag)
                 ai_judge_result = ai_out.get("ai_judge")
             except Exception as exc:
                 ai_judge_result = {
@@ -1257,7 +1264,8 @@ class EmailAnalyzer:
 
             explanations=explanations,
 
-            segmentation=segmentation,
+            segments=segments,
+            has_images=has_images_flag,
             ai_judge=ai_judge_result,
         )
 
