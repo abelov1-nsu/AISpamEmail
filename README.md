@@ -1,97 +1,60 @@
-Email AI-Content Forensic Pipeline
+# AISpamEmail: Анализ email-писем на спам, фишинг и AI-контент
 
-Пайплайн для анализа .eml файлов на предмет AI-сгенерированного контента. Разбирает тело письма, извлекает MIME- и inline (data-URI) изображения, прогоняет их через локальный детектор (image_analyzer), опционально — через LLM (OpenAI-совместимый или локальный Ollama/Qwen), и пишет JSON-отчёт с временной меткой.
+Комплексный инструмент для выявления спама, фишинга и AI-сгенерированного контента в письмах формата `.eml`.
 
-Устойчив к ошибкам: падение одного артефакта не останавливает обработку письма, отчёт всё равно будет создан.
-Требования
+Архитектура проекта декомпозирована на специализированные модули:
+* **`email_analysis`** — эвристический анализ писем (URL, стилометрия, спам/фишинг паттерны, повторы) и пакетная обработка;
+* **`ai_integration`** — клиент к Open WebUI / OpenAI API для семантической сегментации и LLM-judge;
+* **`inference`** — forensic-конвейер детального пофайлового анализа одного письма с извлечением вложений и классификацией изображений;
+* **`models`** — архитектура и скрипты обучения детектора AI-сгенерированных изображений (MobileNetV3 / EfficientNet);
+* **`dataset`** — скрипты подготовки данных и построения baseline-классификаторов.
 
-    Python 3.10+
+---
 
-    Модуль image_analyzer.py рядом с pipeline.py (должен экспортировать analyze_image(path: str, config: dict) -> dict)
+## Сводная таблица сценариев запуска
 
-    Опционально для LLM-слоя: OPENAI_API_KEY или запущенный Ollama с vision-моделью (например, llava:7b)
+| Сценарий | Команда | Результат |
+|---|---|---|
+| **Пакетный эвристический анализ** | `python main.py --dataset samples --output analysis_results` | Обработка каталога писем, формирование JSON-отчётов и `summary.json` |
+| **Демо-анализ через фасад** | `python main.py --demo` | Расчёт spam, phishing и ai-assisted scores на встроенных синтетических примерах |
+| **Демо-анализ через пакет** | `python -m email_analysis --demo` | Запуск анализа напрямую через модуль `email_analysis` |
+| **Справка CLI модуля** | `python -m email_analysis.cli --help` | Справка CLI-адаптера эвристического анализатора |
+| **Forensic EML конвейер** | `python -m inference.pipeline .\samples\ru_test_email.eml -o .\forensic_test` | Извлечение MIME, артефактов и классификация AI-изображений с JSON-отчётом |
+| **Загрузка чекпоинта MobileNetV3** | `python -c "from inference.image_analyzer import ImageDetector; from inference.config import DEFAULT_CONFIG; ImageDetector(DEFAULT_CONFIG['image_checkpoint'])"` | Проверка загрузки обученного чекпоинта на устройство |
+| **Обучение детектора** | `python -m models.scripts.train_image_detector --help` | Справка по обучению детектора изображений FAKE-vs-REAL |
+| **Импорт всех пакетов** | `python -c "import ai_integration, email_analysis, inference, models"` | Проверка целостности импортов и отсутствия циклических зависимостей |
 
-Пайплайн использует только стандартную библиотеку Python. В requirements.txt кладите зависимости вашего image_analyzer и LLM-клиентов.
+> Полное руководство по установке окружения, настройке `.env` и опциям см. в [docs/USAGE.md](file:///d:/NSU/PROJECTS/AISpamEmail/docs/USAGE.md).
 
-# image detection / ML (адаптируйте под свой image_analyzer)
-torch
-torchvision
-pillow
-numpy
+---
 
-# optional LLM layer
-openai
-requests
-ollama
+## Быстрый старт
 
-Установка
-bash
+### 1. Установка окружения
 
-python -m venv .venv
-source .venv/bin/activate        # Linux / macOS
-# .venv\Scripts\Activate.ps1     # Windows PowerShell
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+```
 
-pip install --upgrade pip
-pip install -r requirements.txt
+*(или с использованием `uv`: `uv venv --python 3.12 && uv pip install -r requirements.txt`)*
 
-# только если use_llm включён
-export OPENAI_API_KEY="sk-..."
+### 2. Запуск эвристического анализа
 
-**Быстрый старт**
-1. Получение примеров .eml
+```powershell
+# Запуск демонстрации на синтетических данных
+python main.py --demo
 
-    Gmail: открыть письмо → ⋮ → Download message
+# Анализ папки с реальными письмами
+python main.py --dataset samples --output analysis_results
+```
 
-    Thunderbird: правый клик → Save As → .eml
+### 3. Запуск forensic-анализа конкретного письма
 
-    Outlook: File → Save As → MIME / .eml
-
-bash
-
-mkdir -p samples
-cp ~/Downloads/my_message.eml samples/example.eml
-
-2. Запустите
-bash
-
-python pipeline.py samples/example.eml
-# или с явной папкой вывода:
-python pipeline.py samples/example.eml -o ./forensic_reports
-
-На stdout придёт краткая сводка:
-json
-
-{
-  "status": "completed",
-  "ruling": {
-    "label": "no_ai_detected_in_analyzed_images",
-    "strongest_ai_score": 0.0,
-    "basis": "image_detector"
-  },
-  "report": "/abs/path/forensic_reports/20260101T120000Z_Subject_ab12cd34.json"
-}
-
-3. Отчёт
-
-Лежит в forensic_reports/ — <UTC-timestamp>_<subject>_<uuid8>.json. Ключевые поля:
-Поле	Значение
-analysis.status	completed или failed
-email_metadata	Subject, From, To, Cc, Date, Message-ID
-artifacts[]	По одной записи на текст/HTML/картинку со своим status и ruling
-errors[]	Нефатальные ошибки извлечения
-ruling	Агрегированный вывод по письму
-4. Как библиотека
-python
-
-from pipeline import process_email
-
-report = process_email(
-    "samples/example.eml",
-    output_dir="forensic_reports",
-    config={"use_llm": True, "llm_provider": "openai"},
-)
-print(report["ruling"]["label"])
-print(report["output"]["report_path"])
+```powershell
+python -m inference.pipeline samples/ru_test_email.eml -o forensic_reports
+```
 
 Как это работает (коротко)
 

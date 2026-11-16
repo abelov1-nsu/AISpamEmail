@@ -1,9 +1,9 @@
 import os
-import json
 import pandas as pd
+from dataset.src.paths import PROCESSED_DATA_DIR, RAW_DATA_DIR
 
 TARGET_COLS = ["id", "subject", "body", "cta", "label"]
-os.makedirs("data", exist_ok=True)
+PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ====================== НОРМАЛИЗАЦИЯ ======================
@@ -30,15 +30,15 @@ def finalize(df, id_prefix, label):
 
 
 # ====================== 1. SPAMASSASSIN ======================
-df_spam = pd.read_csv("data/dataset_spamassassin.csv")
+df_spam = pd.read_csv(RAW_DATA_DIR / "dataset_spamassassin.csv")
 df_spam = finalize(df_spam, id_prefix="spam", label="human_spam")
 print(f"SpamAssassin: {len(df_spam)}")
 
 
 # ====================== 2. AI-SPAM ======================
 ai_files = [
-    "data/dataset_ai_spam.csv",
-    "data/dataset_ai_spam_2.csv",
+    RAW_DATA_DIR / "dataset_ai_spam.csv",
+    RAW_DATA_DIR / "dataset_ai_spam_2.csv",
 ]
 
 ai_frames = []
@@ -85,7 +85,7 @@ else:
 
 # ====================== 3. PARTIALLY AI ======================
 partial_files = [
-    "data/dataset_ai_spam_partial.json",
+    RAW_DATA_DIR / "dataset_ai_spam_partial.json",
 ]
 
 partial_frames = []
@@ -125,7 +125,7 @@ else:
 
 
 # ====================== 4. ENRON (legit) ======================
-df_enron = pd.read_csv("data/enron_spam_data.csv")
+df_enron = pd.read_csv(RAW_DATA_DIR / "enron_spam_data.csv")
 print(f"Enron всего: {len(df_enron)}")
 
 df_enron = df_enron[df_enron["Spam/Ham"] == "ham"].copy()
@@ -164,7 +164,7 @@ df_final = pd.concat(balanced, ignore_index=True)
 
 
 # ====================== 7. СОХРАНЕНИЕ ======================
-df_final.to_csv("data/dataset.csv", index=False, encoding="utf-8")
+df_final.to_csv(PROCESSED_DATA_DIR / "dataset.csv", index=False, encoding="utf-8")
 
 print("\n" + "=" * 50)
 print(f"✅ Итого писем: {len(df_final)}")

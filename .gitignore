@@ -25,6 +25,7 @@ venv/
 .venv/
 env/
 ENV/
+.env
 
 # ---------- Данные (тяжёлые, воспроизводимы скриптами) ----------
 data/*.csv
@@ -33,6 +34,27 @@ data/*.json
 data/*.pdf
 data/images/*
 !data/.gitkeep
+samples/
+analysis_results/
+forensic_reports/
+forensic_test/
+
+# ---------- Model training outputs ----------
+models/checkpoints/*
+!models/checkpoints/.gitkeep
+!models/checkpoints/ai_image_detector_mobilenet_v3_small.pth
+models/reports/*
+!models/reports/image_detector/
+!models/reports/image_detector/.gitkeep
+
+# ---------- Dataset workspace ----------
+dataset/data/raw/*
+!dataset/data/raw/.gitkeep
+dataset/data/processed/*
+!dataset/data/processed/dataset_clean.csv
+dataset/data/.tmp_images/
+dataset/reports/*
+!dataset/reports/.gitkeep
 
 # ---------- Jupyter ----------
 .ipynb_checkpoints/
