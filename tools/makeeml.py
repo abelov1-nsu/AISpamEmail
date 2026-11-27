@@ -20,6 +20,7 @@ import random
 import re
 import threading
 import uuid
+import stat
 import webbrowser
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -42,6 +43,59 @@ AI_OPEN = "<AI>"
 AI_CLOSE = "</AI>"
 
 
+class ToolTip:
+    """Small Tk tooltip with Russian technical explanations."""
+    def __init__(self, widget, text, delay=450):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.window = None
+        self.after_id = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self.after_id = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self.after_id:
+            try:
+                self.widget.after_cancel(self.after_id)
+            except tk.TclError:
+                pass
+            self.after_id = None
+
+    def _show(self):
+        if self.window or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 14
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+            win = tk.Toplevel(self.widget)
+            win.wm_overrideredirect(True)
+            win.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(
+                win, text=self.text, justify="left", wraplength=390,
+                background="#fff8dc", foreground="#222", relief="solid",
+                borderwidth=1, padx=9, pady=6,
+            )
+            label.pack()
+            self.window = win
+        except tk.TclError:
+            self.window = None
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self.window:
+            try:
+                self.window.destroy()
+            except tk.TclError:
+                pass
+            self.window = None
+
+
 class OpenWebUIClient:
     """OpenAI-compatible HTTP transport for Open WebUI."""
 
@@ -56,6 +110,45 @@ class OpenWebUIClient:
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+
+    def list_models(self) -> list[str]:
+        """Fetch model IDs from Open WebUI's /api/models endpoint."""
+        if requests is None:
+            raise RuntimeError("Не установлен пакет requests. Выполните: pip install requests")
+        if not self.base_url:
+            raise RuntimeError("Сначала укажите базовый URL сервера.")
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        response = requests.get(
+            f"{self.base_url}/api/models", headers=headers, timeout=self.timeout
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"Ошибка HTTP {response.status_code} при загрузке моделей.\n"
+                f"Ответ сервера: {response.text[:2000]}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Сервер вернул не JSON: {response.text[:1000]}") from exc
+        if isinstance(data, dict):
+            items = data.get("data", data.get("models", []))
+        else:
+            items = data
+        if not isinstance(items, list):
+            raise RuntimeError("Неожиданный формат /api/models: ожидался список моделей.")
+        ids = []
+        for item in items:
+            if isinstance(item, str):
+                model_id = item
+            elif isinstance(item, dict):
+                model_id = item.get("id") or item.get("name") or item.get("model")
+            else:
+                model_id = None
+            if isinstance(model_id, str) and model_id.strip():
+                ids.append(model_id.strip())
+        return list(dict.fromkeys(ids))
 
     def chat(
         self,
@@ -91,10 +184,10 @@ class OpenWebUIClient:
         )
         if not response.ok:
             raise RuntimeError(
-                f"Open WebUI HTTP {response.status_code}\n"
+                f"Ошибка Open WebUI: HTTP {response.status_code}\n"
                 f"URL: {response.url}\n"
-                f"Response: {response.text}\n"
-                f"Request payload: {payload}"
+                f"Ответ сервера: {response.text[:3000]}\n\n"
+                f"Проверьте точный ID модели и параметры запроса."
             )
         try:
             content = response.json()["choices"][0]["message"]["content"]
@@ -291,7 +384,9 @@ class EMLWorkbench:
         self.root.geometry("1120x850")
         self.root.minsize(850, 650)
 
-        self.output_dir = tk.StringVar(value=str(Path.home() / "EML Dataset"))
+        self.settings_path = Path.home() / ".eml_dataset_workbench" / "settings.json"
+        saved = self._load_settings()
+        self.output_dir = tk.StringVar(value=saved.get("output_dir", str(Path.home() / "EML Dataset")))
         self.from_var = tk.StringVar(value="sender@example.test")
         self.to_var = tk.StringVar(value="recipient@example.test")
         self.cc_var = tk.StringVar()
@@ -302,12 +397,14 @@ class EMLWorkbench:
         self.in_reply_to_var = tk.StringVar()
         self.references_var = tk.StringVar()
 
-        self.base_url_var = tk.StringVar(value="http://localhost:3000")
-        self.api_key_var = tk.StringVar()
-        self.model_var = tk.StringVar()
-        self.timeout_var = tk.StringVar(value="90")
-        self.temperature_var = tk.StringVar(value="0.3")
-        self.max_tokens_var = tk.StringVar(value="2048")
+        self.base_url_var = tk.StringVar(value=saved.get("base_url", "http://localhost:3000"))
+        self.api_key_var = tk.StringVar(value=saved.get("api_key", ""))
+        self.model_var = tk.StringVar(value=saved.get("model", ""))
+        self.timeout_var = tk.StringVar(value=str(saved.get("timeout", "90")))
+        self.temperature_var = tk.StringVar(value=str(saved.get("temperature", "0.3")))
+        self.max_tokens_var = tk.StringVar(value=str(saved.get("max_tokens", "2048")))
+        self.model_combo = None
+        self.models_status_var = tk.StringVar(value="Модели ещё не загружены")
 
         self.images = {}       # marker name -> file path
         self.attachments = []
@@ -317,6 +414,11 @@ class EMLWorkbench:
         self.busy = False
         self.last_saved = None
         self._build_ui()
+        for variable in (self.output_dir, self.base_url_var, self.api_key_var, self.model_var,
+                         self.timeout_var, self.temperature_var, self.max_tokens_var):
+            variable.trace_add("write", self._schedule_save_settings)
+        self.root.protocol("WM_DELETE_WINDOW", self.close_app)
+        self.root.after(500, self.refresh_models)
 
     def _build_ui(self):
         outer = ttk.Frame(self.root, padding=10)
@@ -491,27 +593,139 @@ class EMLWorkbench:
         ).pack(anchor="w", pady=12)
 
     def _build_settings_tab(self):
-        frame = ttk.LabelFrame(self.settings_tab, text="Open WebUI — OpenAI-compatible API", padding=10)
+        frame = ttk.LabelFrame(self.settings_tab, text="Подключение к Open WebUI", padding=10)
         frame.pack(fill="x", anchor="n")
-        settings = [
-            ("Base URL", self.base_url_var, False),
-            ("API key (optional)", self.api_key_var, True),
-            ("Model identifier", self.model_var, False),
-            ("Timeout (seconds)", self.timeout_var, False),
-            ("Temperature", self.temperature_var, False),
-            ("Default max tokens", self.max_tokens_var, False),
-        ]
-        for i, (label, var, secret) in enumerate(settings):
-            ttk.Label(frame, text=label).grid(row=i, column=0, sticky="w", pady=4, padx=(0, 8))
-            ttk.Entry(frame, textvariable=var, show="*" if secret else "").grid(row=i, column=1, sticky="ew", pady=4)
+
+        url_label = ttk.Label(frame, text="Базовый адрес сервера")
+        url_label.grid(row=0, column=0, sticky="w", pady=4, padx=(0, 8))
+        ttk.Entry(frame, textvariable=self.base_url_var).grid(row=0, column=1, columnspan=2, sticky="ew", pady=4)
+        ToolTip(url_label, "Корневой адрес Open WebUI, например http://localhost:3000. Не добавляйте сюда /api и /api/chat/completions: приложение добавит путь самостоятельно. Если сервер опубликован через подпуть reverse proxy, укажите этот подпуть после домена.")
+
+        key_label = ttk.Label(frame, text="API-ключ (необязательно)")
+        key_label.grid(row=1, column=0, sticky="w", pady=4, padx=(0, 8))
+        ttk.Entry(frame, textvariable=self.api_key_var, show="*").grid(row=1, column=1, columnspan=2, sticky="ew", pady=4)
+        ToolTip(key_label, "Ключ передаётся в заголовке Authorization: Bearer … для запросов к /api/models и /api/chat/completions. Если сервер не требует авторизацию, поле можно оставить пустым.")
+
+        model_label = ttk.Label(frame, text="Модель (ID из API)")
+        model_label.grid(row=2, column=0, sticky="w", pady=4, padx=(0, 8))
+        self.model_combo = ttk.Combobox(frame, textvariable=self.model_var, state="normal")
+        self.model_combo.grid(row=2, column=1, sticky="ew", pady=4)
+        ToolTip(model_label, "Используйте именно ID модели, возвращённый /api/models, а не её отображаемое название. Сравнение ID может учитывать регистр: если сервер показывает qwen3:8b, значение Qwen3:8B может привести к HTTP 400. Выберите модель из списка, чтобы избежать опечаток.")
+        refresh_button = ttk.Button(frame, text="Загрузить модели", command=self.refresh_models)
+        refresh_button.grid(row=2, column=2, sticky="ew", padx=(6, 0), pady=4)
+        ToolTip(refresh_button, "Выполняет GET-запрос к {базовый_адрес}/api/models и заполняет список точными ID. Требует доступности сервера и корректного API-ключа.")
+        lower_button = ttk.Button(frame, text="В нижний регистр", command=self.lowercase_model)
+        lower_button.grid(row=3, column=1, sticky="w", pady=(0, 4))
+        ToolTip(lower_button, "Преобразует введённый ID модели в нижний регистр. Используйте только если именно такой ID указан в /api/models. Не все серверы требуют lowercase; безопаснее выбирать точное значение из списка.")
+        ttk.Label(frame, textvariable=self.models_status_var, foreground="#555").grid(row=3, column=2, sticky="w", padx=(6, 0))
+
+        timeout_label = ttk.Label(frame, text="Тайм-аут, секунд")
+        timeout_label.grid(row=4, column=0, sticky="w", pady=4, padx=(0, 8))
+        ttk.Entry(frame, textvariable=self.timeout_var, width=12).grid(row=4, column=1, sticky="w", pady=4)
+        ToolTip(timeout_label, "Максимальное время ожидания HTTP-ответа. Большие модели и длинные ответы могут генерироваться дольше обычного; при тайм-ауте увеличьте значение.")
+
+        temp_label = ttk.Label(frame, text="Температура")
+        temp_label.grid(row=5, column=0, sticky="w", pady=4, padx=(0, 8))
+        ttk.Entry(frame, textvariable=self.temperature_var, width=12).grid(row=5, column=1, sticky="w", pady=4)
+        ToolTip(temp_label, "Параметр temperature управляет случайностью генерации. Низкие значения дают более стабильный результат; высокие — больше разнообразия. Некоторые backend-модели могут ограничивать допустимый диапазон.")
+
+        tokens_label = ttk.Label(frame, text="Максимум токенов по умолчанию")
+        tokens_label.grid(row=6, column=0, sticky="w", pady=4, padx=(0, 8))
+        ttk.Entry(frame, textvariable=self.max_tokens_var, width=12).grid(row=6, column=1, sticky="w", pady=4)
+        ToolTip(tokens_label, "Передаётся как max_tokens в запросе генерации. Это верхняя граница длины ответа, а не точное число токенов. Поддержка и лимиты зависят от модели и backend.")
+
         frame.columnconfigure(1, weight=1)
         ttk.Label(
             frame,
-            text="Endpoint: {base_url}/api/chat/completions\n"
-                 "The API key is held in memory for this session and is not written to the dataset.",
-            foreground="#555",
-        ).grid(row=len(settings), column=0, columnspan=2, sticky="w", pady=(8, 4))
-        ttk.Button(frame, text="Test connection", command=self.test_connection).grid(row=len(settings)+1, column=0, sticky="w", pady=5)
+            text="Запросы: GET {URL}/api/models и POST {URL}/api/chat/completions\n"
+                 "Настройки сохраняются локально в домашней папке пользователя. API-ключ хранится в файле настроек в открытом виде; не используйте общий аккаунт Windows.",
+            foreground="#555", wraplength=850, justify="left",
+        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(9, 4))
+        ttk.Button(frame, text="Проверить генерацию", command=self.test_connection).grid(row=8, column=0, sticky="w", pady=5)
+        ttk.Button(frame, text="Сохранить настройки", command=self.save_settings).grid(row=8, column=1, sticky="w", pady=5)
+
+    def _load_settings(self):
+        try:
+            if self.settings_path.exists():
+                data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            pass
+        return {}
+
+    def _schedule_save_settings(self, *_args):
+        # Save directly; values are small and this avoids losing settings on abrupt close.
+        self.save_settings(silent=True)
+
+    def save_settings(self, silent=False):
+        data = {
+            "output_dir": self.output_dir.get(),
+            "base_url": self.base_url_var.get().strip(),
+            "api_key": self.api_key_var.get(),
+            "model": self.model_var.get().strip(),
+            "timeout": self.timeout_var.get().strip(),
+            "temperature": self.temperature_var.get().strip(),
+            "max_tokens": self.max_tokens_var.get().strip(),
+        }
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            self.settings_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            try:
+                self.settings_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass
+            if not silent:
+                messagebox.showinfo("Настройки", f"Настройки сохранены в:\n{self.settings_path}")
+        except OSError as exc:
+            if not silent:
+                messagebox.showerror("Ошибка сохранения настроек", str(exc))
+
+    def close_app(self):
+        self.save_settings(silent=True)
+        self.root.destroy()
+
+    def lowercase_model(self):
+        self.model_var.set(self.model_var.get().strip().lower())
+
+    def refresh_models(self):
+        if self.busy:
+            messagebox.showinfo("Запрос выполняется", "Дождитесь завершения текущего AI-запроса.")
+            return
+        self.busy = True
+        self.models_status_var.set("Загрузка списка моделей…")
+        self.status_var.set("Запрос списка моделей Open WebUI…")
+
+        def worker():
+            try:
+                try:
+                    timeout = float(self.timeout_var.get())
+                except ValueError:
+                    timeout = 90.0
+                client = OpenWebUIClient(self.base_url_var.get().strip(), self.api_key_var.get(), timeout=timeout)
+                models = client.list_models()
+                self.root.after(0, lambda values=models: self._models_loaded(values, None))
+            except Exception as exc:
+                self.root.after(0, lambda err=str(exc): self._models_loaded([], err))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _models_loaded(self, models, error):
+        self.busy = False
+        if error:
+            self.models_status_var.set("Не удалось загрузить модели")
+            self.status_var.set("Ошибка загрузки моделей.")
+            messagebox.showerror("Ошибка /api/models", error)
+            return
+        current = self.model_var.get().strip()
+        values = list(models)
+        if current and current not in values:
+            values.insert(0, current)
+        self.model_combo["values"] = values
+        self.models_status_var.set(f"Найдено моделей: {len(models)}")
+        if models and (not current or current not in models):
+            self.model_var.set(models[0])
+        self.status_var.set(f"Список моделей обновлён: {len(models)}")
+        self.save_settings(silent=True)
 
     def choose_folder(self):
         selected = filedialog.askdirectory(initialdir=self.output_dir.get() or str(Path.home()))
